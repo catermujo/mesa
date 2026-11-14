@@ -606,12 +606,30 @@ alu_to_msl(struct nir_to_msl_ctx *ctx, nir_alu_instr *instr)
    case nir_op_u2u8:
    case nir_op_u2u16:
    case nir_op_u2u32:
-   case nir_op_u2u64:
    case nir_op_f2f16:
    case nir_op_f2f16_rtne:
    case nir_op_f2f32:
       alu_funclike(ctx, instr, msl_type_for_def(ctx->types, &instr->def));
       break;
+   case nir_op_u2u64: {
+      /* KK_WORKAROUND_20 */
+      nir_def *src = instr->src[0].src.ssa;
+      if (!(ctx->disabled_workarounds & BITFIELD64_BIT(20)) &&
+          instr->def.num_components == 1 && src->num_components == 1 &&
+          src->bit_size == 32 && nir_def_is_alu(src)) {
+         nir_alu_instr *shift = nir_def_as_alu(src);
+         if (shift->op == nir_op_ishl &&
+             nir_src_is_const(shift->src[1].src)) {
+            P(ctx, "((ulong(uint(");
+            alu_src_to_msl(ctx, shift, 0);
+            P(ctx, ")) << %uu) & 0xfffffffful)",
+              (unsigned)nir_alu_src_as_uint(shift->src[1]) & 31u);
+            break;
+         }
+      }
+      alu_funclike(ctx, instr, msl_type_for_def(ctx->types, &instr->def));
+      break;
+   }
    case nir_op_frcp:
       P(ctx, "1/");
       alu_src_to_msl(ctx, instr, 0);

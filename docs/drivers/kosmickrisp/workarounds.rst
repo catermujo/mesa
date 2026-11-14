@@ -49,6 +49,27 @@ info on what was updated.
 Workarounds
 ===========
 
+KK_WORKAROUND_20
+----------------
+| macOS version: 27.0.1 (26A434), Apple M4 Pro
+| Metal ticket: Unreported
+| Metal ticket status:
+| Reproducer failure: VIZZA grain-contact force reference, with 8,192 particles
+| Comments:
+
+Metal can produce incorrect addresses for a masked hash index shifted left in
+32 bits and then converted to 64 bits. Extra diagnostic stores change the
+result. The same generated MSL fails through native Metal without Vulkan.
+
+Compute constant shifts in 64 bits before the conversion result is used.
+Mask the result to 32 bits to preserve the original wrap behavior.
+The workaround applies to scalar unsigned conversions of 32-bit constant
+left shifts. Disable it with ``MESA_KK_DISABLE_WORKAROUNDS=20`` for comparison.
+Other GPU and OS combinations remain untested.
+
+| Log:
+| 2026-11-14: Added the workaround after CPU reference and native Metal checks.
+
 KK_WORKAROUND_19
 ----------------
 | macOS version: 26 and 27

@@ -1880,6 +1880,9 @@ kk_msl_deserialize(struct blob_reader *blob, struct msl_compile_data *data)
    if (blob->overrun)
       return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
 
+   if (KK_DEBUG(MSL))
+      mesa_logi("%s\n", data->code);
+
    return VK_SUCCESS;
 }
 
