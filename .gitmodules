@@ -1,0 +1,13 @@
+[submodule "subprojects/spirv-llvm-translator"]
+	path = subprojects/spirv-llvm-translator
+	url = https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git
+	branch = llvm_release_220
+[submodule "subprojects/spirv-headers"]
+	path = subprojects/spirv-headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers.git
+[submodule "subprojects/vulkan-loader"]
+	path = subprojects/vulkan-loader
+	url = https://github.com/KhronosGroup/Vulkan-Loader.git
+[submodule "subprojects/vulkan-headers"]
+	path = subprojects/vulkan-headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
