@@ -60,6 +60,11 @@ kk_timeline_wait(struct vk_device *device, struct vk_sync *sync,
    struct kk_sync_timeline *timeline =
       container_of(sync, struct kk_sync_timeline, base);
 
+   if (abs_timeout_ns == 0) {
+      return mtl_shared_event_get_signaled_value(timeline->mtl_handle) >= wait_value
+                ? VK_SUCCESS : VK_TIMEOUT;
+   }
+
    /* abs_timeout_ns is the point in time when we should stop waiting, not the
     * absolute time in ns. Therefore, we need to compute the delta from now to
     * when we should stop waiting and convert to ms for Metal to be happy

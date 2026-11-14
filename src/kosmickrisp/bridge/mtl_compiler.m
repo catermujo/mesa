@@ -19,6 +19,7 @@ mtl_new_compiler(mtl_device *device)
 {
    @autoreleasepool {
       id<MTLDevice> dev = (id<MTLDevice>)device;
+      dev.shouldMaximizeConcurrentCompilation = YES;
 
       MTL4CompilerDescriptor *desc = [[MTL4CompilerDescriptor new] autorelease];
 
