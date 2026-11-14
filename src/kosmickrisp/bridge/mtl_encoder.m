@@ -514,7 +514,7 @@ mtl_compute_write_timestamp(mtl_compute_encoder *encoder,
       id<MTL4ComputeCommandEncoder> enc =
          (id<MTL4ComputeCommandEncoder>)encoder;
       id<MTL4CounterHeap> h = (id<MTL4CounterHeap>)heap;
-      [enc writeTimestampWithGranularity:MTL4TimestampGranularityRelaxed
+      [enc writeTimestampWithGranularity:MTL4TimestampGranularityPrecise
                                 intoHeap:h
                                  atIndex:index];
    }
@@ -528,7 +528,7 @@ mtl_render_write_timestamp(mtl_render_encoder *encoder,
    @autoreleasepool {
       id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
       id<MTL4CounterHeap> h = (id<MTL4CounterHeap>)heap;
-      [enc writeTimestampWithGranularity:MTL4TimestampGranularityRelaxed
+      [enc writeTimestampWithGranularity:MTL4TimestampGranularityPrecise
                               afterStage:(MTLRenderStages)stage
                                 intoHeap:h
                                  atIndex:index];

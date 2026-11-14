@@ -382,31 +382,9 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
    enum mtl_render_stages mtl_stage =
       kk_pipeline_stages_to_mtl_render_stage(stage);
 
-   uint32_t heap_index = query;
-
    if (cmd->metal.render) {
-      /* If we've already issued a timestamp write for a render stage, reuse it
-       * because reissuing might return a 0 timestamp
-       */
-      bool reused = false;
-      util_dynarray_foreach(&cmd->ts_stage_map, struct kk_ts_stage_entry,
-                            entry) {
-         if (entry->stage == mtl_stage && entry->heap == pool->ts.heap) {
-            heap_index = entry->index;
-            reused = true;
-            break;
-         }
-      }
-
-      if (!reused) {
-         struct kk_ts_stage_entry entry = {.heap = pool->ts.heap,
-                                           .stage = mtl_stage,
-                                           .index = query};
-         util_dynarray_append(&cmd->ts_stage_map, entry);
-
-         mtl_render_write_timestamp(cmd->metal.render, mtl_stage, pool->ts.heap,
-                                    query);
-      }
+      mtl_render_write_timestamp(cmd->metal.render, mtl_stage, pool->ts.heap,
+                                 query);
    } else {
       /* compute encoder active or nothing active. If the latter, the write will
        * create a new compute encoder.  The timestamp write needs compute work
@@ -425,10 +403,18 @@ kk_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
    for (uint32_t i = 0; i < count; i++) {
       struct kk_ts_resolve resolve = {
          .heap = pool->ts.heap,
-         .index = heap_index,
+         .index = query,
          .dst_addr = kk_query_report_addr(dev, pool, query + i),
       };
       util_dynarray_append(&cmd->ts_resolves, resolve);
+   }
+
+   if (cmd->metal.render) {
+      /* Metal samples render stages per encoder, so end the pass to keep each query distinct. */
+      kk_apply_attachment_store_ops(cmd, true);
+      cs_end(cmd);
+      kk_cmd_buffer_dirty_all_gfx(cmd);
+      cmd->state.gfx.need_to_start_render_pass = true;
    }
 }
 
