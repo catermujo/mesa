@@ -337,6 +337,8 @@ wsi_metal_surface_get_present_rectangles(VkIcdSurfaceBase *surface,
 struct wsi_metal_image {
    struct wsi_image base;
    CAMetalDrawable *drawable;
+   /* Keep native calls outside the worker lock while a drawable is assigned. */
+   bool drawable_assigned;
 };
 
 struct wsi_metal_present_info {
@@ -362,6 +364,15 @@ struct wsi_metal_swapchain {
    struct wsi_metal_present_info *present_info;
 
    uint32_t current_image_index;
+
+   /* nextDrawable has no nonblocking form. Keep its wait off the application
+    * thread, with at most one drawable reserved ahead of acquisition. */
+   mtx_t drawable_mutex;
+   struct u_cnd_monotonic drawable_cond;
+   thrd_t drawable_thread;
+   bool drawable_thread_started;
+   bool drawable_thread_stop;
+   CAMetalDrawable *ready_drawable;
 
    /* VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR */
    bool opaque_composition;
@@ -587,45 +598,114 @@ wsi_cmd_blit_image_to_image(const struct wsi_swapchain *chain,
    return result;
 }
 
+static uint32_t
+wsi_metal_available_image(struct wsi_metal_swapchain *chain)
+{
+   for (uint32_t n = 0; n < chain->base.image_count; n++) {
+      uint32_t i = (chain->current_image_index + n) % chain->base.image_count;
+      if (!chain->images[i].drawable_assigned)
+         return i;
+   }
+   return UINT32_MAX;
+}
+
+static int
+wsi_metal_acquire_drawables(void *data)
+{
+   struct wsi_metal_swapchain *chain = data;
+   mtx_lock(&chain->drawable_mutex);
+   while (!chain->drawable_thread_stop) {
+      if (chain->ready_drawable || wsi_metal_available_image(chain) == UINT32_MAX) {
+         u_cnd_monotonic_wait(&chain->drawable_cond, &chain->drawable_mutex);
+         continue;
+      }
+
+      mtx_unlock(&chain->drawable_mutex);
+      CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
+      mtx_lock(&chain->drawable_mutex);
+      if (chain->drawable_thread_stop) {
+         if (drawable)
+            wsi_metal_release_drawable(drawable);
+         break;
+      }
+      chain->ready_drawable = drawable;
+      u_cnd_monotonic_broadcast(&chain->drawable_cond);
+      if (!drawable) {
+         /* An occluded layer can fail immediately; do not spin on nextDrawable. */
+         struct timespec retry;
+         timespec_from_nsec(&retry, os_time_get_absolute_timeout(1000000));
+         u_cnd_monotonic_timedwait(&chain->drawable_cond, &chain->drawable_mutex, &retry);
+      }
+   }
+   mtx_unlock(&chain->drawable_mutex);
+   return 0;
+}
+
+static void
+wsi_metal_stop_drawable_thread(struct wsi_metal_swapchain *chain)
+{
+   if (!chain->drawable_thread_started)
+      return;
+
+   mtx_lock(&chain->drawable_mutex);
+   chain->drawable_thread_stop = true;
+   CAMetalDrawable *drawable = chain->ready_drawable;
+   chain->ready_drawable = NULL;
+   u_cnd_monotonic_broadcast(&chain->drawable_cond);
+   mtx_unlock(&chain->drawable_mutex);
+   if (drawable)
+      wsi_metal_release_drawable(drawable);
+   thrd_join(chain->drawable_thread, NULL);
+   chain->drawable_thread_started = false;
+}
+
+static VkResult
+wsi_metal_swapchain_release_images(struct wsi_swapchain *wsi_chain,
+                                   uint32_t count, const uint32_t *indices);
+
 static VkResult
 wsi_metal_swapchain_acquire_next_image(struct wsi_swapchain *wsi_chain,
                                        const VkAcquireNextImageInfoKHR *info,
                                        uint32_t *image_index)
 {
-   struct wsi_metal_swapchain *chain =
-      (struct wsi_metal_swapchain *)wsi_chain;
-   struct timespec start_time, end_time;
-   struct timespec rel_timeout;
+   struct wsi_metal_swapchain *chain = (struct wsi_metal_swapchain *)wsi_chain;
+   struct timespec deadline;
+   timespec_from_nsec(&deadline, os_time_get_absolute_timeout(info->timeout));
 
-   timespec_from_nsec(&rel_timeout, info->timeout);
-
-   clock_gettime(CLOCK_MONOTONIC, &start_time);
-   timespec_add(&end_time, &rel_timeout, &start_time);
-
-   while (1) {
-      /* Try to acquire an drawable. Unfortunately we might block for up to 1 second. */
-      CAMetalDrawable *drawable = wsi_metal_layer_acquire_drawable(chain->surface->pLayer);
-      if (drawable) {
-         uint32_t i = (chain->current_image_index++) % chain->base.image_count;
-         struct wsi_metal_image *image = &chain->images[i];
-         *image_index = i;
-         image->drawable = drawable;
-         if (!wsi_chain->wsi->sw) {
-            chain->base.wsi->metal.bind_drawable_to_vkimage(image->base.blit.image,
-                                                            image->drawable);
-            /* Since present images will only be backed by MTLTextures after acquisition,
-             * we need to re-record the command buffer so it uses the new drawable. */
-            wsi_cmd_blit_image_to_image(wsi_chain, &wsi_chain->image_info, &image->base);
-         }
-         return VK_SUCCESS;
-      }
-
-      /* Check for timeout. */
-      struct timespec current_time;
-      clock_gettime(CLOCK_MONOTONIC, &current_time);
-      if (timespec_after(&current_time, &end_time))
+   mtx_lock(&chain->drawable_mutex);
+   uint32_t i;
+   while ((i = wsi_metal_available_image(chain)) == UINT32_MAX || !chain->ready_drawable) {
+      if (info->timeout == 0) {
+         mtx_unlock(&chain->drawable_mutex);
          return VK_NOT_READY;
+      }
+      int ret = info->timeout == UINT64_MAX ?
+         u_cnd_monotonic_wait(&chain->drawable_cond, &chain->drawable_mutex) :
+         u_cnd_monotonic_timedwait(&chain->drawable_cond, &chain->drawable_mutex, &deadline);
+      if (ret != thrd_success) {
+         mtx_unlock(&chain->drawable_mutex);
+         return ret == thrd_timedout ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
+      }
    }
+   struct wsi_metal_image *image = &chain->images[i];
+   image->drawable_assigned = true;
+   image->drawable = chain->ready_drawable;
+   chain->ready_drawable = NULL;
+   chain->current_image_index = (i + 1) % chain->base.image_count;
+   u_cnd_monotonic_broadcast(&chain->drawable_cond);
+   mtx_unlock(&chain->drawable_mutex);
+
+   if (!wsi_chain->wsi->sw) {
+      chain->base.wsi->metal.bind_drawable_to_vkimage(image->base.blit.image, image->drawable);
+      /* The native texture changes on acquisition, so record the blit here. */
+      VkResult result = wsi_cmd_blit_image_to_image(wsi_chain, &wsi_chain->image_info, &image->base);
+      if (result != VK_SUCCESS) {
+         wsi_metal_swapchain_release_images(wsi_chain, 1, &i);
+         return result;
+      }
+   }
+   *image_index = i;
+   return VK_SUCCESS;
 }
 
 static VkResult
@@ -656,6 +736,10 @@ wsi_metal_swapchain_release_images(struct wsi_swapchain *wsi_chain,
          wsi_metal_release_drawable(image->drawable);
          image->drawable = NULL;
       }
+      mtx_lock(&chain->drawable_mutex);
+      image->drawable_assigned = false;
+      u_cnd_monotonic_broadcast(&chain->drawable_cond);
+      mtx_unlock(&chain->drawable_mutex);
    }
 
    return VK_SUCCESS;
@@ -715,6 +799,11 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
       /* Blit is already recorded, just present now */
       wsi_metal_layer_present(&image->drawable);
    }
+
+   mtx_lock(&chain->drawable_mutex);
+   image->drawable_assigned = false;
+   u_cnd_monotonic_broadcast(&chain->drawable_cond);
+   mtx_unlock(&chain->drawable_mutex);
 
    uint32_t width = 0u, height = 0u;
    wsi_metal_layer_size(chain->surface->pLayer, &width, &height);
@@ -845,6 +934,10 @@ wsi_metal_swapchain_destroy(struct wsi_swapchain *wsi_chain,
    struct wsi_metal_swapchain *chain =
       (struct wsi_metal_swapchain *)wsi_chain;
 
+   wsi_metal_stop_drawable_thread(chain);
+   u_cnd_monotonic_destroy(&chain->drawable_cond);
+   mtx_destroy(&chain->drawable_mutex);
+
    for (uint32_t i = 0; i < chain->base.image_count; i++) {
       struct wsi_metal_image *image = &chain->images[i];
       if (image->drawable) {
@@ -886,6 +979,12 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    assert(metal_surface->pLayer);
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR);
+
+   /* A retired swapchain must not reserve a drawable from its replacement. */
+   if (pCreateInfo->oldSwapchain != VK_NULL_HANDLE) {
+      VK_FROM_HANDLE(wsi_metal_swapchain, old_chain, pCreateInfo->oldSwapchain);
+      wsi_metal_stop_drawable_thread(old_chain);
+   }
 
    const int num_images = pCreateInfo->minImageCount;
    const bool opaque_composition =
@@ -977,11 +1076,35 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    if (is_sw_driver)
       chain->blit_context = wsi_create_metal_layer_blit_context();
 
+   if (mtx_init(&chain->drawable_mutex, mtx_plain) != thrd_success) {
+      result = VK_ERROR_OUT_OF_HOST_MEMORY;
+      goto fail_init_images;
+   }
+   if (u_cnd_monotonic_init(&chain->drawable_cond) != thrd_success) {
+      mtx_destroy(&chain->drawable_mutex);
+      result = VK_ERROR_OUT_OF_HOST_MEMORY;
+      goto fail_init_images;
+   }
+   if (thrd_create(&chain->drawable_thread, wsi_metal_acquire_drawables, chain) != thrd_success) {
+      u_cnd_monotonic_destroy(&chain->drawable_cond);
+      mtx_destroy(&chain->drawable_mutex);
+      result = VK_ERROR_OUT_OF_HOST_MEMORY;
+      goto fail_init_images;
+   }
+   chain->drawable_thread_started = true;
+
    *swapchain_out = &chain->base;
 
    return VK_SUCCESS;
 
 fail_init_images:
+   if (wsi_device->metal.get_mtl4_command_queue) {
+      void *mtl4_queue = wsi_device->metal.get_mtl4_command_queue(chain->base.device);
+      if (mtl4_queue)
+         wsi_metal_layer_remove_queue_resident(metal_surface->pLayer, mtl4_queue);
+   }
+   if (is_sw_driver && chain->blit_context)
+      wsi_destroy_metal_layer_blit_context(chain->blit_context);
    for (uint32_t i = 0; i < created_image_count; i++)
       wsi_metal_destroy_image(chain, &chain->images[i]);
 

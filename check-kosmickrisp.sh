@@ -16,6 +16,15 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
     -o "$root/build-kosmickrisp/tests/sync_poll"
 "$root/build-kosmickrisp/tests/sync_poll"
 
+# Exercise the Cocoa presentation path as well as offscreen queue completion.
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -I"$root/subprojects/vulkan-headers/include" \
+    "$root/src/kosmickrisp/tests/drawable_acquire.m" \
+    -L"$runtime" -lvulkan -Wl,-rpath,"$runtime" \
+    -framework Cocoa -framework QuartzCore -framework Metal \
+    -o "$root/build-kosmickrisp/tests/drawable_acquire"
+"$root/build-kosmickrisp/tests/drawable_acquire"
+
 if [ "$#" -ge 1 ]; then
     cc -std=c11 -O2 -Wall -Wextra -Werror \
         -I"$root/subprojects/vulkan-headers/include" \
