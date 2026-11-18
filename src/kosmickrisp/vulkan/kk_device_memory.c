@@ -9,6 +9,7 @@
 
 #include "kk_device.h"
 #include "kk_entrypoints.h"
+#include "kk_image.h"
 #include "kk_physical_device.h"
 
 #include "kosmickrisp/bridge/mtl_bridge.h"
@@ -22,7 +23,6 @@
 #include <inttypes.h>
 #include <sys/mman.h>
 
-/* Supports mtlheap only */
 const VkExternalMemoryProperties kk_mtlheap_mem_props = {
    .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT |
                              VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
@@ -49,8 +49,7 @@ kk_GetMemoryMetalHandlePropertiesEXT(
    VK_FROM_HANDLE(kk_device, dev, device);
    struct kk_physical_device *pdev = kk_device_physical(dev);
 
-   /* We only support heaps since that's the backing for all our memory and
-    * simplifies implementation */
+   /* Only heaps can be imported. */
    switch (handleType) {
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
       break;
@@ -148,6 +147,21 @@ kk_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
          goto fail_alloc;
    }
 
+   if (mem->vk.export_handle_types &
+       VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT) {
+      const VkMemoryDedicatedAllocateInfo *dedicated = vk_find_struct_const(
+         pAllocateInfo->pNext, MEMORY_DEDICATED_ALLOCATE_INFO);
+      assert(dedicated && dedicated->image);
+      VK_FROM_HANDLE(kk_image, image, dedicated->image);
+      mem->export_texture = mtl_new_texture_with_descriptor(
+         mem->bo->mtl_handle, &image->planes[0].layout, 0);
+      if (!mem->export_texture) {
+         kk_destroy_bo(dev, mem->bo);
+         result = vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         goto fail_alloc;
+      }
+   }
+
    *pMem = kk_device_memory_to_handle(mem);
 
    return VK_SUCCESS;
@@ -171,6 +185,8 @@ kk_FreeMemory(VkDevice device, VkDeviceMemory _mem,
    if (mem->map)
       kk_bo_unmap(dev, mem->bo, mem->map, false);
 
+   if (mem->export_texture)
+      mtl_release(mem->export_texture);
    kk_destroy_bo(dev, mem->bo);
 
    vk_device_memory_destroy(&dev->vk, pAllocator, &mem->vk);
@@ -290,23 +306,21 @@ kk_GetMemoryMetalHandleEXT(
    VkDevice device, const VkMemoryGetMetalHandleInfoEXT *pGetMetalHandleInfo,
    void **pHandle)
 {
-   /* We only support heaps since that's the backing for all our memory and
-    * simplifies implementation */
-   assert(pGetMetalHandleInfo->handleType ==
-          VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT);
    VK_FROM_HANDLE(kk_device_memory, mem, pGetMetalHandleInfo->memory);
 
-   /* In some cases, such as host pointer imports, we don't have a MTLHeap */
-   if (!mem->bo->mtl_handle)
+   /* Both handles are borrowed for the lifetime of the allocation. */
+   switch (pGetMetalHandleInfo->handleType) {
+   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
+      *pHandle = mem->bo->mtl_handle;
+      break;
+   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT:
+      *pHandle = mem->export_texture;
+      break;
+   default:
       return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
-
-   /* From the Vulkan spec of vkGetMemoryMetalHandleEXT:
-    *
-    *    "Unless the app retains the handle object returned by the call,
-    *     the lifespan will be the same as the associated VkDeviceMemory"
-    */
-   *pHandle = mem->bo->mtl_handle;
-   return VK_SUCCESS;
+   }
+   return *pHandle ? VK_SUCCESS
+                   : vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
 }
 #endif /* VK_USE_PLATFORM_METAL_EXT */
 

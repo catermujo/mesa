@@ -19,6 +19,7 @@
 struct kk_device_memory {
    struct vk_device_memory vk;
    struct kk_bo *bo;
+   mtl_texture *export_texture;
    void *map;
 };
 

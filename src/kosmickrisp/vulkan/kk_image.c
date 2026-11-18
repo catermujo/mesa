@@ -441,11 +441,23 @@ kk_GetPhysicalDeviceImageFormatProperties2(
          return VK_ERROR_FORMAT_NOT_SUPPORTED;
    }
 
+   const unsigned plane_count =
+      vk_format_get_plane_count(pImageFormatInfo->format);
+   static const VkExternalMemoryProperties texture_export = {
+      .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT |
+                                VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT,
+      .compatibleHandleTypes =
+         VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT,
+   };
    const VkExternalMemoryProperties *ext_mem_props = NULL;
    if (external_info != NULL && external_info->handleType != 0) {
-      /* We only support heaps since that's the backing for all our memory and
-       * simplifies implementation */
       switch (external_info->handleType) {
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT:
+         if (pImageFormatInfo->tiling != VK_IMAGE_TILING_OPTIMAL ||
+             plane_count != 1)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+         ext_mem_props = &texture_export;
+         break;
       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT:
          ext_mem_props = &kk_mtlheap_mem_props;
          break;
@@ -472,9 +484,6 @@ kk_GetPhysicalDeviceImageFormatProperties2(
                              external_info->handleType));
       }
    }
-
-   const unsigned plane_count =
-      vk_format_get_plane_count(pImageFormatInfo->format);
 
    /* From the Vulkan 1.3.259 spec, VkImageCreateInfo:
     *
@@ -750,10 +759,12 @@ kk_get_image_memory_requirements(struct kk_device *dev, struct kk_image *image,
       switch (sType) {
       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
          VkMemoryDedicatedRequirements *dedicated = ext;
-         dedicated->prefersDedicatedAllocation =
-            image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
          dedicated->requiresDedicatedAllocation =
-            image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+            image->vk.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT ||
+            (image->vk.external_handle_types &
+             VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT);
+         dedicated->prefersDedicatedAllocation =
+            dedicated->requiresDedicatedAllocation;
          break;
       }
       default:
@@ -908,7 +919,9 @@ kk_image_plane_bind(struct kk_device *dev, struct kk_image *image,
 
    plane->mem = mem;
    plane->mem_offset_B = *offset_B;
-   plane->mtl_handle = kk_image_plane_create_texture(plane, &plane->layout, 0u);
+   plane->mtl_handle = mem->export_texture ? mtl_retain(mem->export_texture)
+                                           : kk_image_plane_create_texture(
+                                                plane, &plane->layout, 0u);
    if (plane->mtl_handle == NULL)
       return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
