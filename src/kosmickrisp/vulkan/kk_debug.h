@@ -12,6 +12,8 @@ enum kk_debug {
    KK_DEBUG_MSL = 1ull << 1,
    /* Forces robustness for all shaders */
    KK_DEBUG_FORCE_ROBUSTNESS = 1ull << 2,
+   /* Encode indirect draws on the CPU, one Metal draw per command */
+   KK_DEBUG_NO_ICB = 1ull << 3,
 };
 
 extern enum kk_debug kk_mesa_debug_flags;

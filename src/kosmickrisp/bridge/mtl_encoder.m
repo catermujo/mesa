@@ -10,6 +10,7 @@
 #include <Metal/MTL4ComputeCommandEncoder.h>
 #include <Metal/MTL4Counters.h>
 #include <Metal/MTL4RenderCommandEncoder.h>
+#include <Metal/MTLIndirectCommandBuffer.h>
 #include <Metal/MTLRenderPass.h>
 
 /* Common encoder utils */
@@ -454,6 +455,26 @@ void
 mtl_draw_batch_end(void *pool)
 {
    objc_autoreleasePoolPop(pool);
+}
+
+void
+mtl_execute_commands_in_buffer(mtl_render_encoder *encoder,
+                               mtl_indirect_command_buffer *icb,
+                               uint32_t command_count)
+{
+   id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+   [enc executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)icb
+                      withRange:NSMakeRange(0, command_count)];
+}
+
+void
+mtl_execute_commands_in_buffer_indirect(mtl_render_encoder *encoder,
+                                        mtl_indirect_command_buffer *icb,
+                                        uint64_t range_addr)
+{
+   id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+   [enc executeCommandsInBuffer:(id<MTLIndirectCommandBuffer>)icb
+                 indirectBuffer:range_addr];
 }
 
 void

@@ -64,12 +64,16 @@ fail:
 VkResult
 kk_device_init_lib(struct kk_device *dev)
 {
-   return build_precompiled_shaders(dev);
+   VkResult result = build_precompiled_shaders(dev);
+   if (result == VK_SUCCESS)
+      kk_icb_pool_init(dev);
+   return result;
 }
 
 void
 kk_device_finish_lib(struct kk_device *dev)
 {
+   kk_icb_pool_finish(dev);
    for (uint32_t i = 0; i < LIBKK_NUM_PROGRAMS; ++i)
       mtl_release(dev->precompiled_cache.shaders[i].pipeline);
 }

@@ -92,6 +92,12 @@ mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(
 {
 }
 
+void
+mtl_render_pipeline_descriptor_set_support_indirect_command_buffers(
+   mtl_render_pipeline_descriptor *descriptor, bool enabled)
+{
+}
+
 /* Render pipeline */
 mtl_render_pipeline_state *
 mtl_new_render_pipeline(mtl_compiler *compiler,

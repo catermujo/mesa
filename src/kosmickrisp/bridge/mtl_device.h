@@ -29,6 +29,15 @@ void mtl_device_get_architecture_name(mtl_device *dev, char buffer[256]);
 /* Returns 0 if no Apple family is supported */
 uint32_t mtl_device_get_gpu_apple_family(mtl_device *dev);
 uint64_t mtl_device_get_registry_id(mtl_device *dev);
+
+/* An indirect command buffer of draw and indexed draw commands that inherit
+ * the pipeline, buffers and every other piece of render state from the
+ * encoder that runs them. Returns NULL when Metal refuses the size. */
+mtl_indirect_command_buffer *
+mtl_new_indirect_command_buffer(mtl_device *dev, uint32_t max_command_count);
+/* The ID that GPU code uses to encode commands into the buffer. */
+uint64_t
+mtl_indirect_command_buffer_get_resource_id(mtl_indirect_command_buffer *icb);
 bool mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count);
 struct mtl_size mtl_device_max_threads_per_threadgroup(mtl_device *dev);
 uint32_t mtl_device_max_threadgroup_memory_length(mtl_device *dev);

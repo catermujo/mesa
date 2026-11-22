@@ -2345,6 +2345,84 @@ build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
    return draw;
 }
 
+/* Writes the draws into an indirect command buffer with a compute kernel and
+ * runs them with one Metal call, instead of encoding one Metal draw per
+ * command. The kernel applies a GPU draw count itself, so these draws skip the
+ * predicate pass and Metal runs only the counted commands. Returns false,
+ * having drawn nothing, when the draw does not qualify: emulated stages,
+ * per-draw data, unrolled or adjacency geometry and conditional rendering keep
+ * the CPU path. */
+static bool
+kk_draw_icb(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
+            bool emulated)
+{
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   if (dev->icbs.encode == NULL || emulated || data->upload_mask ||
+       mesa_prim_has_adjacency(data->prim) || requires_unroll(cmd, data))
+      return false;
+   bool counted = data->predicate_count == 1 &&
+                  data->predicate_op[0] == KK_PREDICATE_GT_DRAW_ID;
+   if (data->predicate_count > 0 && !counted)
+      return false;
+   if (data->draw_count <
+       (counted ? KK_ICB_MIN_PREDICATED_DRAWS : KK_ICB_MIN_DRAWS))
+      return false;
+
+   struct kk_icb icb;
+   if (!kk_convert_to_indirect_draw(cmd, data) ||
+       !kk_cmd_acquire_icb(cmd, data->draw_count, &icb))
+      return false;
+
+   struct kk_icb_encode_args args = {
+      .icb = icb.resource_id,
+      .commands = data->indirect_command.addr,
+      .stride_B = data->indirect_command.stride,
+      .draw_count = data->draw_count,
+      .primitive_type = mesa_prim_to_mtl_primitive_type(data->prim),
+   };
+   if (data->indexed) {
+      struct kk_addr_range index_range =
+         kk_sanitize_index_range(cmd, data->index_buffer);
+      args.index_buffer = index_range.addr;
+      args.index_range_B = (uint32_t)MIN2(index_range.range, UINT32_MAX);
+      args.index_size_B = data->index_buffer_el_size_B;
+   }
+   if (counted) {
+      /* MTLIndirectCommandBufferExecutionRange: location, length */
+      struct kk_ptr range = kk_pool_alloc(cmd, 2u * sizeof(uint32_t), 4u);
+      if (unlikely(!range.gpu))
+         return false;
+      args.count = data->predicate_addr[0];
+      args.range = range.gpu;
+   }
+   struct kk_ptr args_gpu = kk_pool_upload(cmd, &args, sizeof(args), 8u);
+   if (unlikely(!args_gpu.gpu))
+      return false;
+
+   mtl_compute_encoder *encoder = cs_get_compute(cmd);
+   mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH);
+   mtl_set_address(cmd->argument_table, args_gpu.gpu, 0u);
+   mtl_compute_set_pipeline_state(encoder, dev->icbs.encode);
+   kk_dispatch_compute(encoder, kk_grid_1d(data->draw_count),
+                       (struct mtl_size){KK_ICB_ENCODE_GROUP_SIZE, 1u, 1u});
+   mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH);
+   mtl_set_address(cmd->argument_table, cmd->state.root_addr, 0u);
+
+   /* The compute pass ended the render pass; restart it with all state. */
+   kk_flush_gfx_state(cmd);
+   void *draw_batch = mtl_draw_batch_begin();
+   if (counted)
+      mtl_execute_commands_in_buffer_indirect(cs_get_render(cmd), icb.handle,
+                                              args.range);
+   else
+      mtl_execute_commands_in_buffer(cs_get_render(cmd), icb.handle,
+                                     data->draw_count);
+   mtl_draw_batch_end(draw_batch);
+   return true;
+}
+
 static void
 kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
@@ -2357,12 +2435,15 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    data->flatshade_first =
       dyn->rs.provoking_vertex == VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
 
+   bool tess = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
+   bool geom = cmd->state.shaders[MESA_SHADER_GEOMETRY];
+
+   if (kk_draw_icb(cmd, data, tess || geom))
+      return;
+
    /* Convert to indirect and process predicates. Skip draw if we fail. */
    if (data->predicate_count > 0 && !kk_predicate_draws(cmd, data))
       return;
-
-   bool tess = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
-   bool geom = cmd->state.shaders[MESA_SHADER_GEOMETRY];
 
    /* Unroll geometry. Skip draw if we fail. */
    if (requires_unroll(cmd, data) && !kk_unroll_geometry(cmd, data))

@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: MIT */
-/* Check indirect count draws past 65535 commands. Each command lights one
- * pixel chosen by its firstInstance; the GPU count stops short of the command
- * total, so exactly the first COUNT pixels must be lit, for indexed and
- * non-indexed draws. */
+/* Check long indirect draws, with and without a GPU count. Each command lights
+ * one pixel chosen by its firstInstance, so exactly the first N pixels must be
+ * lit, where N is the number of commands that should run. The cases cover
+ * draws past 65535 commands, counts of zero and above the command total, and
+ * the lengths around the driver's indirect command buffer limits, for indexed
+ * and non-indexed draws. */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -19,10 +21,27 @@
       }                                                                        \
    } while (0)
 
-#define WIDTH       512u
-#define HEIGHT      256u
-#define MAX_DRAWS   70000u
-#define COUNT       66000u
+#define WIDTH    512u
+#define HEIGHT   512u
+#define COMMANDS 200000u
+
+struct draw_case {
+   const char *name;
+   /* maxDrawCount, or drawCount without a count buffer */
+   uint32_t max_draws;
+   /* GPU count, or UINT32_MAX for a draw without a count buffer */
+   uint32_t count;
+};
+
+static const struct draw_case cases[] = {
+   {"count", 70000u, 66000u},
+   {"count zero", 70000u, 0u},
+   {"count above max", 70000u, 90000u},
+   {"long count", 200000u, 150000u},
+   {"count short", 40u, 30u},
+   {"no count", 70000u, UINT32_MAX},
+   {"no count short", 100u, UINT32_MAX},
+};
 
 struct buffer {
    VkBuffer buffer;
@@ -131,9 +150,9 @@ int main(int argc, char **argv)
    VkPhysicalDeviceProperties props;
    vkGetPhysicalDeviceProperties(gpu, &props);
    printf("maxDrawIndirectCount: %u\n", props.limits.maxDrawIndirectCount);
-   if (props.limits.maxDrawIndirectCount < MAX_DRAWS) {
+   if (props.limits.maxDrawIndirectCount < COMMANDS) {
       fprintf(stderr, "maxDrawIndirectCount %u is below %u\n",
-              props.limits.maxDrawIndirectCount, MAX_DRAWS);
+              props.limits.maxDrawIndirectCount, COMMANDS);
       return 1;
    }
    vkGetPhysicalDeviceQueueFamilyProperties(gpu, &count, NULL);
@@ -300,20 +319,19 @@ int main(int argc, char **argv)
 
    /* One command per pixel, in the indexed layout and the plain layout. */
    struct buffer draws =
-      host_buffer(device, gpu, MAX_DRAWS * sizeof(VkDrawIndirectCommand),
+      host_buffer(device, gpu, COMMANDS * sizeof(VkDrawIndirectCommand),
                   VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
-   struct buffer indexed_draws = host_buffer(
-      device, gpu, MAX_DRAWS * sizeof(VkDrawIndexedIndirectCommand),
-      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+   struct buffer indexed_draws =
+      host_buffer(device, gpu, COMMANDS * sizeof(VkDrawIndexedIndirectCommand),
+                  VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
    VkDrawIndirectCommand *plain = draws.map;
    VkDrawIndexedIndirectCommand *indexed = indexed_draws.map;
-   for (uint32_t i = 0; i < MAX_DRAWS; i++) {
+   for (uint32_t i = 0; i < COMMANDS; i++) {
       plain[i] = (VkDrawIndirectCommand){3, 1, 0, i};
       indexed[i] = (VkDrawIndexedIndirectCommand){3, 1, 0, 0, i};
    }
    struct buffer counter = host_buffer(device, gpu, sizeof(uint32_t),
                                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
-   *(uint32_t *)counter.map = COUNT;
    struct buffer indices = host_buffer(device, gpu, 3 * sizeof(uint32_t),
                                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
    uint32_t *index_data = indices.map;
@@ -344,96 +362,119 @@ int main(int argc, char **argv)
    V(vkCreateQueryPool(device, &qpi, NULL, &queries));
 
    int failed = 0;
-   for (int pass = 0; pass < 2; pass++) {
-      int use_indices = pass == 1;
-      if (only && strcmp(only, use_indices ? "indexed" : "plain"))
-         continue;
-      double best_record_ms = 1e30, best_run_ms = 1e30, best_gpu_ms = 1e30;
-      for (unsigned iteration = 0; iteration < repeat; iteration++) {
-      memset(readback.map, 0x55, WIDTH * HEIGHT * 4);
-      double record_start = now_ms();
-      V(vkResetCommandBuffer(cmd, 0));
-      VkCommandBufferBeginInfo begin = {
-          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-      V(vkBeginCommandBuffer(cmd, &begin));
-      vkCmdResetQueryPool(cmd, queries, 0, 2);
-      vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queries, 0);
-      VkClearValue clear = {.color = {{0, 0, 0, 0}}};
-      VkRenderPassBeginInfo rbi = {
-          .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-          .renderPass = render,
-          .framebuffer = framebuffer,
-          .renderArea = scissor,
-          .clearValueCount = 1,
-          .pClearValues = &clear};
-      vkCmdBeginRenderPass(cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-      if (use_indices) {
-         vkCmdBindIndexBuffer(cmd, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-         vkCmdDrawIndexedIndirectCount(cmd, indexed_draws.buffer, 0,
-                                       counter.buffer, 0, MAX_DRAWS,
-                                       sizeof(VkDrawIndexedIndirectCommand));
-      } else {
-         vkCmdDrawIndirectCount(cmd, draws.buffer, 0, counter.buffer, 0,
-                                MAX_DRAWS, sizeof(VkDrawIndirectCommand));
-      }
-      vkCmdEndRenderPass(cmd);
-      vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries,
-                          1);
-      VkBufferImageCopy copy = {
-          .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-          .imageExtent = {WIDTH, HEIGHT, 1}};
-      vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                             readback.buffer, 1, &copy);
-      VkMemoryBarrier host = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                              .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                              .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
-      vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host, 0, NULL, 0,
-                           NULL);
-      V(vkEndCommandBuffer(cmd));
-      double record_ms = now_ms() - record_start;
-      VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                             .commandBufferCount = 1,
-                             .pCommandBuffers = &cmd};
-      double submit_start = now_ms();
-      V(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE));
-      V(vkQueueWaitIdle(queue));
-      double run_ms = now_ms() - submit_start;
-      best_record_ms = record_ms < best_record_ms ? record_ms : best_record_ms;
-      best_run_ms = run_ms < best_run_ms ? run_ms : best_run_ms;
-      uint64_t ticks[2];
-      V(vkGetQueryPoolResults(device, queries, 0, 2, sizeof(ticks), ticks, 8,
-                              VK_QUERY_RESULT_64_BIT));
-      double gpu_ms = (double)(ticks[1] - ticks[0]) *
-                      props.limits.timestampPeriod / 1e6;
-      best_gpu_ms = gpu_ms < best_gpu_ms ? gpu_ms : best_gpu_ms;
-      if (iteration + 1 < repeat)
-         continue;
+   for (unsigned c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+      for (int pass = 0; pass < 2; pass++) {
+         const struct draw_case *dc = &cases[c];
+         int use_count = dc->count != UINT32_MAX;
+         uint32_t expected =
+            use_count ? (dc->count < dc->max_draws ? dc->count : dc->max_draws)
+                      : dc->max_draws;
+         *(uint32_t *)counter.map = use_count ? dc->count : 0u;
+         int use_indices = pass == 1;
+         if (only && strcmp(only, use_indices ? "indexed" : "plain"))
+            continue;
+         double best_record_ms = 1e30, best_run_ms = 1e30, best_gpu_ms = 1e30;
+         for (unsigned iteration = 0; iteration < repeat; iteration++) {
+            memset(readback.map, 0x55, WIDTH * HEIGHT * 4);
+            double record_start = now_ms();
+            V(vkResetCommandBuffer(cmd, 0));
+            VkCommandBufferBeginInfo begin = {
+               .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            V(vkBeginCommandBuffer(cmd, &begin));
+            vkCmdResetQueryPool(cmd, queries, 0, 2);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queries,
+                                0);
+            VkClearValue clear = {.color = {{0, 0, 0, 0}}};
+            VkRenderPassBeginInfo rbi = {
+               .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+               .renderPass = render,
+               .framebuffer = framebuffer,
+               .renderArea = scissor,
+               .clearValueCount = 1,
+               .pClearValues = &clear};
+            vkCmdBeginRenderPass(cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            if (use_indices) {
+               vkCmdBindIndexBuffer(cmd, indices.buffer, 0,
+                                    VK_INDEX_TYPE_UINT32);
+               if (use_count)
+                  vkCmdDrawIndexedIndirectCount(
+                     cmd, indexed_draws.buffer, 0, counter.buffer, 0,
+                     dc->max_draws, sizeof(VkDrawIndexedIndirectCommand));
+               else
+                  vkCmdDrawIndexedIndirect(
+                     cmd, indexed_draws.buffer, 0, dc->max_draws,
+                     sizeof(VkDrawIndexedIndirectCommand));
+            } else if (use_count) {
+               vkCmdDrawIndirectCount(cmd, draws.buffer, 0, counter.buffer, 0,
+                                      dc->max_draws,
+                                      sizeof(VkDrawIndirectCommand));
+            } else {
+               vkCmdDrawIndirect(cmd, draws.buffer, 0, dc->max_draws,
+                                 sizeof(VkDrawIndirectCommand));
+            }
+            vkCmdEndRenderPass(cmd);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                queries, 1);
+            VkBufferImageCopy copy = {
+               .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+               .imageExtent = {WIDTH, HEIGHT, 1}};
+            vkCmdCopyImageToBuffer(cmd, image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   readback.buffer, 1, &copy);
+            VkMemoryBarrier host = {
+               .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+               .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+               .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &host, 0,
+                                 NULL, 0, NULL);
+            V(vkEndCommandBuffer(cmd));
+            double record_ms = now_ms() - record_start;
+            VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                                   .commandBufferCount = 1,
+                                   .pCommandBuffers = &cmd};
+            double submit_start = now_ms();
+            V(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE));
+            V(vkQueueWaitIdle(queue));
+            double run_ms = now_ms() - submit_start;
+            best_record_ms =
+               record_ms < best_record_ms ? record_ms : best_record_ms;
+            best_run_ms = run_ms < best_run_ms ? run_ms : best_run_ms;
+            uint64_t ticks[2];
+            V(vkGetQueryPoolResults(device, queries, 0, 2, sizeof(ticks), ticks,
+                                    8, VK_QUERY_RESULT_64_BIT));
+            double gpu_ms = (double)(ticks[1] - ticks[0]) *
+                            props.limits.timestampPeriod / 1e6;
+            best_gpu_ms = gpu_ms < best_gpu_ms ? gpu_ms : best_gpu_ms;
+            if (iteration + 1 < repeat)
+               continue;
 
-      const unsigned char *pixels = readback.map;
-      uint32_t lit = 0, wrong = 0, first_wrong = UINT32_MAX;
-      for (uint32_t i = 0; i < WIDTH * HEIGHT; i++) {
-         int on = pixels[i * 4 + 3] == 255;
-         lit += on;
-         if (on != (i < COUNT)) {
-            wrong++;
-            if (first_wrong == UINT32_MAX)
-               first_wrong = i;
+            const unsigned char *pixels = readback.map;
+            uint32_t lit = 0, wrong = 0, first_wrong = UINT32_MAX;
+            for (uint32_t i = 0; i < WIDTH * HEIGHT; i++) {
+               int on = pixels[i * 4 + 3] == 255;
+               lit += on;
+               if (on != (i < expected)) {
+                  wrong++;
+                  if (first_wrong == UINT32_MAX)
+                     first_wrong = i;
+               }
+            }
+            printf(
+               "%s, %s: %u of %u commands drawn, %u expected, %u wrong pixels",
+               dc->name, use_indices ? "indexed" : "plain", lit, dc->max_draws,
+               expected, wrong);
+            if (wrong)
+               printf(" (first at %u)", first_wrong);
+            printf("; record %.2f ms, submit to idle %.2f ms, GPU %.2f ms",
+                   best_record_ms, best_run_ms, best_gpu_ms);
+            if (repeat > 1)
+               printf(" (best of %u)", repeat);
+            printf("\n");
+            failed |= wrong != 0;
          }
       }
-      printf("%s: %u of %u commands drawn, count %u, %u wrong pixels",
-             use_indices ? "indexed" : "plain", lit, MAX_DRAWS, COUNT, wrong);
-      if (wrong)
-         printf(" (first at %u)", first_wrong);
-      printf("; record %.2f ms, submit to idle %.2f ms, GPU %.2f ms",
-             best_record_ms, best_run_ms, best_gpu_ms);
-      if (repeat > 1)
-         printf(" (best of %u)", repeat);
-      printf("\n");
-      failed |= wrong != 0;
-      }
-   }
 
    destroy_buffer(device, &draws);
    destroy_buffer(device, &indexed_draws);

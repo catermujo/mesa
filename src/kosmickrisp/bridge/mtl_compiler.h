@@ -60,6 +60,10 @@ void mtl_render_pipeline_descriptor_set_rasterization_enabled(
 void mtl_render_pipeline_descriptor_set_max_vertex_amplification_count(
    mtl_render_pipeline_descriptor *descriptor, uint32_t count);
 
+/* Lets indirect command buffers draw with this pipeline as inherited state. */
+void mtl_render_pipeline_descriptor_set_support_indirect_command_buffers(
+   mtl_render_pipeline_descriptor *descriptor, bool enabled);
+
 /* Render pipeline */
 mtl_render_pipeline_state *
 mtl_new_render_pipeline(mtl_compiler *compiler,

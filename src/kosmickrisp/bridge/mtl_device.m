@@ -13,6 +13,7 @@
 #include <Metal/MTL4Counters.h>
 #include <Metal/MTLCaptureManager.h>
 #include <Metal/MTLDevice.h>
+#include <Metal/MTLIndirectCommandBuffer.h>
 
 /* Device creation */
 mtl_device *
@@ -111,6 +112,45 @@ mtl_device_get_registry_id(mtl_device *dev)
    @autoreleasepool {
       id<MTLDevice> device = (id<MTLDevice>)dev;
       return device.registryID;
+   }
+}
+
+mtl_indirect_command_buffer *
+mtl_new_indirect_command_buffer(mtl_device *dev, uint32_t max_command_count)
+{
+   @autoreleasepool {
+      id<MTLDevice> device = (id<MTLDevice>)dev;
+      MTLIndirectCommandBufferDescriptor *desc =
+         [MTLIndirectCommandBufferDescriptor new];
+      desc.commandTypes =
+         MTLIndirectCommandTypeDraw | MTLIndirectCommandTypeDrawIndexed;
+      desc.inheritPipelineState = YES;
+      desc.inheritBuffers = YES;
+      desc.inheritDepthStencilState = YES;
+      desc.inheritDepthBias = YES;
+      desc.inheritDepthClipMode = YES;
+      desc.inheritCullMode = YES;
+      desc.inheritFrontFacingWinding = YES;
+      desc.inheritTriangleFillMode = YES;
+      desc.maxVertexBufferBindCount = 0;
+      desc.maxFragmentBufferBindCount = 0;
+      id<MTLIndirectCommandBuffer> icb = [device
+         newIndirectCommandBufferWithDescriptor:desc
+                                maxCommandCount:max_command_count
+                                        options:
+                                           MTLResourceStorageModePrivate |
+                                           MTLResourceHazardTrackingModeUntracked];
+      [desc release];
+      return icb;
+   }
+}
+
+uint64_t
+mtl_indirect_command_buffer_get_resource_id(mtl_indirect_command_buffer *icb)
+{
+   @autoreleasepool {
+      id<MTLIndirectCommandBuffer> buffer = (id<MTLIndirectCommandBuffer>)icb;
+      return buffer.gpuResourceID._impl;
    }
 }
 

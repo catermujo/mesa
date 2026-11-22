@@ -127,6 +127,16 @@ void mtl_render_set_argument_table(mtl_render_encoder *encoder,
 void *mtl_draw_batch_begin(void);
 void mtl_draw_batch_end(void *pool);
 
+/* Runs the first command_count commands of an indirect command buffer. */
+void mtl_execute_commands_in_buffer(mtl_render_encoder *encoder,
+                                    mtl_indirect_command_buffer *icb,
+                                    uint32_t command_count);
+/* Runs the range of commands that the GPU wrote at range_addr, a
+ * MTLIndirectCommandBufferExecutionRange (location, length). */
+void mtl_execute_commands_in_buffer_indirect(mtl_render_encoder *encoder,
+                                             mtl_indirect_command_buffer *icb,
+                                             uint64_t range_addr);
+
 void mtl_draw_primitives(mtl_render_encoder *encoder,
                          enum mtl_primitive_type primitve_type,
                          uint32_t vertexStart, uint32_t vertexCount,

@@ -50,9 +50,18 @@ The renderer preserves attachments and restores graphics state for subsequent dr
 These encoder boundaries add overhead when an application records timestamps.
 `MESA_KK_DEBUG=msl` also prints shaders restored from a pipeline cache.
 
-Indirect draws accept up to 1,048,576 commands per call (`maxDrawIndirectCount`), not 65,535. Each command is still one
-Metal draw, and a GPU count zeroes the commands past it. The cap keeps the 32-bit sizes derived from it in range.
-The draws of one call share one autorelease pool instead of opening one per Metal draw.
+Indirect draws accept up to 1,048,576 commands per call (`maxDrawIndirectCount`), not 65,535. The cap keeps the 32-bit
+sizes derived from it in range.
+
+Long indirect draws run from a Metal indirect command buffer. A compute kernel writes one Metal draw per Vulkan command
+into it, and the render encoder runs the whole buffer with one call, with the pipeline, buffers and render state
+inherited. With a GPU count, the kernel also writes the range of commands to run, so Metal skips the commands past the
+count and no separate count pass runs. This applies to indirect draws of at least 64 commands with a GPU count and of
+at least 4,096 without one, when no stage is emulated, the shaders read no per-draw data, the draw needs no unrolling,
+and conditional rendering is off. Every render pipeline is built with indirect command buffer support for this.
+Indirect command buffers are pooled by power-of-two size, stay resident, and take about a byte per command on an M4 Pro.
+`MESA_KK_DEBUG=noicb` turns the path off. Other draws issue one Metal draw per command, and the draws of one call share
+one autorelease pool.
 
 `KK_WORKAROUND_20` changes address arithmetic to avoid a Metal compiler failure.
 See `docs/drivers/kosmickrisp/workarounds.rst` for the trigger and tested platform.
@@ -66,8 +75,9 @@ sh check-kosmickrisp.sh
 ```
 
 The checks exercise fence polling, reset, bounded waits, timeline signaling, GPU writes, and distinct timestamps across compute regions.
-When `glslc` is on `PATH`, they also issue 70,000 indexed and non-indexed indirect draws with a GPU count of 66,000 and
-check that exactly the first 66,000 draws ran. The check prints recording, submit-to-idle and GPU times. Run the
+When `glslc` is on `PATH`, they also issue long indexed and non-indexed indirect draws and check that exactly the
+expected draws ran: GPU counts below, at zero and above `maxDrawCount`, 200,000 commands, and short draws that keep the
+per-command path, with and without a count. The check prints recording, submit-to-idle and GPU times. Run the
 binary in `build-kosmickrisp/tests` directly with a repeat count, and optionally `plain` or `indexed`, to take the best of
 many runs or to profile one case:
 

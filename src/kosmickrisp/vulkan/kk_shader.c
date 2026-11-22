@@ -1618,6 +1618,13 @@ kk_compile_graphics_pipeline(struct kk_device *device, struct kk_shader *vs)
          pipeline_descriptor, vs->info.vs.sample_count);
    }
 
+   /* Indirect draws can run from an indirect command buffer that inherits
+    * this pipeline. */
+   if (device->icbs.encode) {
+      mtl_render_pipeline_descriptor_set_support_indirect_command_buffers(
+         pipeline_descriptor, true);
+   }
+
    pipe->gfx.render =
       mtl_new_render_pipeline(device->mtl_compiler_handle, pipeline_descriptor);
    if (pipe->gfx.render == NULL)

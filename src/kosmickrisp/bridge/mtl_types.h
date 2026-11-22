@@ -38,6 +38,7 @@ typedef void mtl_render_pipeline_descriptor;
 typedef void mtl_fence;
 typedef void mtl_stencil_descriptor;
 typedef void mtl_depth_stencil_descriptor;
+typedef void mtl_indirect_command_buffer;
 typedef void mtl_depth_stencil_state;
 typedef void mtl_render_pass_attachment_descriptor;
 typedef void mtl_residency_set;

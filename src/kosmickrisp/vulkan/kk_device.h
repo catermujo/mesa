@@ -10,6 +10,8 @@
 
 #include "kk_private.h"
 
+#include "kk_icb.h"
+
 #include "kk_query_table.h"
 #include "kk_queue.h"
 
@@ -95,6 +97,7 @@ struct kk_device {
    struct kk_residency_set residency_set;
 
    struct kk_precompiled_cache precompiled_cache;
+   struct kk_icb_pool icbs;
 
    bool has_queue;
    struct kk_queue queue;

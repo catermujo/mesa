@@ -55,6 +55,7 @@ kk_cmd_release_resources(struct kk_device *dev, struct kk_cmd_buffer *cmd)
       kk_destroy_bo(dev, *bo);
    }
    util_dynarray_clear(&cmd->large_bos);
+   kk_cmd_release_icbs(cmd);
    util_dynarray_clear(&cmd->post_render_writes);
    util_dynarray_clear(&cmd->ts_resolves);
 }
@@ -95,6 +96,7 @@ kk_destroy_cmd_buffer(struct vk_command_buffer *vk_cmd_buffer)
 
    kk_cmd_release_resources(dev, cmd);
    util_dynarray_fini(&cmd->large_bos);
+   util_dynarray_fini(&cmd->icbs);
    util_dynarray_fini(&cmd->post_render_writes);
    util_dynarray_fini(&cmd->ts_resolves);
 
@@ -139,6 +141,7 @@ kk_create_cmd_buffer(struct vk_command_pool *vk_pool,
    }
 
    cmd->large_bos = UTIL_DYNARRAY_INIT;
+   cmd->icbs = UTIL_DYNARRAY_INIT;
 
    cmd->vk.dynamic_graphics_state.vi = &cmd->state.gfx._dynamic_vi;
    cmd->vk.dynamic_graphics_state.ms.sample_locations =

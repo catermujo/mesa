@@ -47,6 +47,18 @@ mtl_device_get_registry_id(mtl_device *dev)
    return 0u;
 }
 
+mtl_indirect_command_buffer *
+mtl_new_indirect_command_buffer(mtl_device *dev, uint32_t max_command_count)
+{
+   return NULL;
+}
+
+uint64_t
+mtl_indirect_command_buffer_get_resource_id(mtl_indirect_command_buffer *icb)
+{
+   return 0u;
+}
+
 bool
 mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count)
 {

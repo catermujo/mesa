@@ -234,6 +234,20 @@ mtl_draw_batch_end(void *pool)
 }
 
 void
+mtl_execute_commands_in_buffer(mtl_render_encoder *encoder,
+                               mtl_indirect_command_buffer *icb,
+                               uint32_t command_count)
+{
+}
+
+void
+mtl_execute_commands_in_buffer_indirect(mtl_render_encoder *encoder,
+                                        mtl_indirect_command_buffer *icb,
+                                        uint64_t range_addr)
+{
+}
+
+void
 mtl_draw_primitives(mtl_render_encoder *encoder,
                     enum mtl_primitive_type primitve_type, uint32_t vertexStart,
                     uint32_t vertexCount, uint32_t instanceCount,

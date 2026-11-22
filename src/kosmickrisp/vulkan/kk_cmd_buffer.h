@@ -261,6 +261,8 @@ struct kk_cmd_buffer {
 
    /* Owned large BOs */
    struct util_dynarray large_bos;
+   /* Indirect command buffers from the device pool, returned on reset */
+   struct util_dynarray icbs;
 
    /* Does the command buffer use the geometry heap? */
    bool uses_heap;
