@@ -222,6 +222,17 @@ mtl_render_set_argument_table(mtl_render_encoder *encoder,
 {
 }
 
+void *
+mtl_draw_batch_begin(void)
+{
+   return NULL;
+}
+
+void
+mtl_draw_batch_end(void *pool)
+{
+}
+
 void
 mtl_draw_primitives(mtl_render_encoder *encoder,
                     enum mtl_primitive_type primitve_type, uint32_t vertexStart,

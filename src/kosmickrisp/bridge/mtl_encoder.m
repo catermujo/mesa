@@ -438,17 +438,33 @@ mtl_render_set_argument_table(mtl_render_encoder *encoder,
    }
 }
 
+/* Draw wrappers run between mtl_draw_batch_begin and mtl_draw_batch_end, so a
+ * batch of draws shares one autorelease pool instead of paying for one per
+ * draw. */
+extern void *objc_autoreleasePoolPush(void);
+extern void objc_autoreleasePoolPop(void *pool);
+
+void *
+mtl_draw_batch_begin(void)
+{
+   return objc_autoreleasePoolPush();
+}
+
+void
+mtl_draw_batch_end(void *pool)
+{
+   objc_autoreleasePoolPop(pool);
+}
+
 void
 mtl_draw_primitives(mtl_render_encoder *encoder,
                     enum mtl_primitive_type primitve_type, uint32_t vertexStart,
                     uint32_t vertexCount, uint32_t instanceCount,
                     uint32_t baseInstance)
 {
-   @autoreleasepool {
-      id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
-      MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
-      [enc drawPrimitives:type vertexStart:vertexStart vertexCount:vertexCount instanceCount:instanceCount baseInstance:baseInstance];
-   }
+   id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+   MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
+   [enc drawPrimitives:type vertexStart:vertexStart vertexCount:vertexCount instanceCount:instanceCount baseInstance:baseInstance];
 }
 
 void
@@ -460,19 +476,17 @@ mtl_draw_indexed_primitives(mtl_render_encoder *encoder,
                             uint32_t instance_count, int32_t base_vertex,
                             uint32_t base_instance)
 {
-   @autoreleasepool {
-      id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
-      MTLIndexType ndx_type = (MTLIndexType)index_type;
-      MTLPrimitiveType primitive = (MTLPrimitiveType)primitve_type;
-      [enc drawIndexedPrimitives:primitive
-                      indexCount:index_count
-                       indexType:ndx_type
-                     indexBuffer:index_addr
-               indexBufferLength:index_buffer_length
-                   instanceCount:instance_count
-                      baseVertex:base_vertex
-                    baseInstance:base_instance];
-   }
+   id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+   MTLIndexType ndx_type = (MTLIndexType)index_type;
+   MTLPrimitiveType primitive = (MTLPrimitiveType)primitve_type;
+   [enc drawIndexedPrimitives:primitive
+                   indexCount:index_count
+                    indexType:ndx_type
+                  indexBuffer:index_addr
+            indexBufferLength:index_buffer_length
+                instanceCount:instance_count
+                   baseVertex:base_vertex
+                 baseInstance:base_instance];
 }
 
 void
@@ -480,10 +494,8 @@ mtl_draw_primitives_indirect(mtl_render_encoder *encoder,
                              enum mtl_primitive_type primitve_type,
                              uint64_t addr)
 {
-   @autoreleasepool {
-      id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
-      [enc drawPrimitives:(MTLPrimitiveType)primitve_type indirectBuffer:addr];
-   }
+   id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+   [enc drawPrimitives:(MTLPrimitiveType)primitve_type indirectBuffer:addr];
 }
 
 void
@@ -494,16 +506,14 @@ mtl_draw_indexed_primitives_indirect(mtl_render_encoder *encoder,
                                      uint64_t index_buffer_length,
                                      uint64_t addr)
 {
-   @autoreleasepool {
-      id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
-      MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
-      MTLIndexType ndx_type = (MTLIndexType)index_type;
-      [enc drawIndexedPrimitives:type
-                       indexType:ndx_type
-                     indexBuffer:index_addr
-               indexBufferLength:index_buffer_length
-                  indirectBuffer:addr];
-   }
+   id<MTL4RenderCommandEncoder> enc = (id<MTL4RenderCommandEncoder>)encoder;
+   MTLPrimitiveType type = (MTLPrimitiveType)primitve_type;
+   MTLIndexType ndx_type = (MTLIndexType)index_type;
+   [enc drawIndexedPrimitives:type
+                    indexType:ndx_type
+                  indexBuffer:index_addr
+            indexBufferLength:index_buffer_length
+               indirectBuffer:addr];
 }
 
 void

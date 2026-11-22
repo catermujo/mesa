@@ -2378,6 +2378,7 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    if (gs_restart && !kk_convert_to_indirect_draw(cmd, data))
       return;
 
+   void *draw_batch = mtl_draw_batch_begin();
    for (uint32_t i = 0; i < data->draw_count; i++) {
       struct kk_draw_data draw_data = build_draw_data(cmd, data, i);
 
@@ -2397,6 +2398,7 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 
       kk_dispatch_draw(cmd, draw_data);
    }
+   mtl_draw_batch_end(draw_batch);
 }
 
 VKAPI_ATTR void VKAPI_CALL

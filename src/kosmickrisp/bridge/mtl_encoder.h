@@ -122,6 +122,11 @@ void mtl_render_set_argument_table(mtl_render_encoder *encoder,
                                    mtl_argument_table *table,
                                    enum mtl_render_stages stages);
 
+/* Draw calls must run between these, which hold one autorelease pool for the
+ * whole batch. */
+void *mtl_draw_batch_begin(void);
+void mtl_draw_batch_end(void *pool);
+
 void mtl_draw_primitives(mtl_render_encoder *encoder,
                          enum mtl_primitive_type primitve_type,
                          uint32_t vertexStart, uint32_t vertexCount,

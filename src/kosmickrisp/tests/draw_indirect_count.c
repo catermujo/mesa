@@ -104,7 +104,12 @@ static VkShaderModule load_shader(VkDevice device, const char *path)
 
 int main(int argc, char **argv)
 {
-   assert(argc == 3);
+   /* Optional: repeat each pass N times (best times are printed) and run only
+    * "plain" or "indexed", for profiling. */
+   assert(argc >= 3 && argc <= 5);
+   unsigned repeat = argc >= 4 ? (unsigned)atoi(argv[3]) : 1u;
+   const char *only = argc >= 5 ? argv[4] : NULL;
+   assert(repeat >= 1);
    VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                             .apiVersion = VK_API_VERSION_1_2};
    const char *instance_ext = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
@@ -331,16 +336,28 @@ int main(int argc, char **argv)
        .commandBufferCount = 1};
    VkCommandBuffer cmd;
    V(vkAllocateCommandBuffers(device, &ca, &cmd));
+   VkQueryPoolCreateInfo qpi = {.sType =
+                                    VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                                .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                                .queryCount = 2};
+   VkQueryPool queries;
+   V(vkCreateQueryPool(device, &qpi, NULL, &queries));
 
    int failed = 0;
    for (int pass = 0; pass < 2; pass++) {
       int use_indices = pass == 1;
+      if (only && strcmp(only, use_indices ? "indexed" : "plain"))
+         continue;
+      double best_record_ms = 1e30, best_run_ms = 1e30, best_gpu_ms = 1e30;
+      for (unsigned iteration = 0; iteration < repeat; iteration++) {
       memset(readback.map, 0x55, WIDTH * HEIGHT * 4);
       double record_start = now_ms();
       V(vkResetCommandBuffer(cmd, 0));
       VkCommandBufferBeginInfo begin = {
           .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       V(vkBeginCommandBuffer(cmd, &begin));
+      vkCmdResetQueryPool(cmd, queries, 0, 2);
+      vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queries, 0);
       VkClearValue clear = {.color = {{0, 0, 0, 0}}};
       VkRenderPassBeginInfo rbi = {
           .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -361,6 +378,8 @@ int main(int argc, char **argv)
                                 MAX_DRAWS, sizeof(VkDrawIndirectCommand));
       }
       vkCmdEndRenderPass(cmd);
+      vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries,
+                          1);
       VkBufferImageCopy copy = {
           .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
           .imageExtent = {WIDTH, HEIGHT, 1}};
@@ -381,6 +400,16 @@ int main(int argc, char **argv)
       V(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE));
       V(vkQueueWaitIdle(queue));
       double run_ms = now_ms() - submit_start;
+      best_record_ms = record_ms < best_record_ms ? record_ms : best_record_ms;
+      best_run_ms = run_ms < best_run_ms ? run_ms : best_run_ms;
+      uint64_t ticks[2];
+      V(vkGetQueryPoolResults(device, queries, 0, 2, sizeof(ticks), ticks, 8,
+                              VK_QUERY_RESULT_64_BIT));
+      double gpu_ms = (double)(ticks[1] - ticks[0]) *
+                      props.limits.timestampPeriod / 1e6;
+      best_gpu_ms = gpu_ms < best_gpu_ms ? gpu_ms : best_gpu_ms;
+      if (iteration + 1 < repeat)
+         continue;
 
       const unsigned char *pixels = readback.map;
       uint32_t lit = 0, wrong = 0, first_wrong = UINT32_MAX;
@@ -397,8 +426,13 @@ int main(int argc, char **argv)
              use_indices ? "indexed" : "plain", lit, MAX_DRAWS, COUNT, wrong);
       if (wrong)
          printf(" (first at %u)", first_wrong);
-      printf("; record %.2f ms, submit to idle %.2f ms\n", record_ms, run_ms);
+      printf("; record %.2f ms, submit to idle %.2f ms, GPU %.2f ms",
+             best_record_ms, best_run_ms, best_gpu_ms);
+      if (repeat > 1)
+         printf(" (best of %u)", repeat);
+      printf("\n");
       failed |= wrong != 0;
+      }
    }
 
    destroy_buffer(device, &draws);
@@ -406,6 +440,7 @@ int main(int argc, char **argv)
    destroy_buffer(device, &counter);
    destroy_buffer(device, &indices);
    destroy_buffer(device, &readback);
+   vkDestroyQueryPool(device, queries, NULL);
    vkDestroyCommandPool(device, pool, NULL);
    vkDestroyPipeline(device, pipeline, NULL);
    vkDestroyShaderModule(device, vs, NULL);
