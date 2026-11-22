@@ -618,7 +618,7 @@ kk_get_device_properties(
       .subTexelPrecisionBits = 8,
       .mipmapPrecisionBits = 8,
       .maxDrawIndexedIndexValue = UINT32_MAX,
-      .maxDrawIndirectCount = UINT16_MAX,
+      .maxDrawIndirectCount = KK_MAX_DRAW_INDIRECT_COUNT,
       .maxSamplerLodBias = 15,
       .maxSamplerAnisotropy = 16,
       .maxViewports = KK_MAX_VIEWPORTS,

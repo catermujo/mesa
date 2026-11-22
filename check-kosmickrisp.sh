@@ -25,6 +25,24 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
     -o "$root/build-kosmickrisp/tests/drawable_acquire"
 "$root/build-kosmickrisp/tests/drawable_acquire"
 
+# Draw past 65535 indirect commands with a GPU count, when glslc can build the shaders.
+if command -v glslc >/dev/null 2>&1; then
+    glslc "$root/src/kosmickrisp/tests/draw_indirect_count.vert" \
+        -o "$root/build-kosmickrisp/tests/draw_indirect_count.vert.spv"
+    glslc "$root/src/kosmickrisp/tests/draw_indirect_count.frag" \
+        -o "$root/build-kosmickrisp/tests/draw_indirect_count.frag.spv"
+    cc -std=c11 -O2 -Wall -Wextra -Werror \
+        -I"$root/subprojects/vulkan-headers/include" \
+        "$root/src/kosmickrisp/tests/draw_indirect_count.c" \
+        -L"$runtime" -lvulkan -Wl,-rpath,"$runtime" \
+        -o "$root/build-kosmickrisp/tests/draw_indirect_count"
+    "$root/build-kosmickrisp/tests/draw_indirect_count" \
+        "$root/build-kosmickrisp/tests/draw_indirect_count.vert.spv" \
+        "$root/build-kosmickrisp/tests/draw_indirect_count.frag.spv"
+else
+    echo "skipping draw_indirect_count: glslc not found" >&2
+fi
+
 if [ "$#" -ge 1 ]; then
     cc -std=c11 -O2 -Wall -Wextra -Werror \
         -I"$root/subprojects/vulkan-headers/include" \

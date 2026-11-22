@@ -23,6 +23,11 @@
 #define KK_MIN_SSBO_ALIGNMENT            16
 #define KK_MIN_TEXEL_BUFFER_ALIGNMENT    16
 #define KK_MIN_UBO_ALIGNMENT             64
+/* Indirect draws are issued one Metal draw per command, with the GPU count
+ * applied by zeroing commands past it, so the cap only bounds the 32-bit sizes
+ * derived from it: 1024 unroll threads per draw and 20 predicate bytes per
+ * command. */
+#define KK_MAX_DRAW_INDIRECT_COUNT       (1u << 20)
 #define KK_MAX_VIEWPORTS                 16
 #define KK_MAX_DESCRIPTOR_SIZE           64
 #define KK_MAX_PUSH_DESCRIPTORS          32

@@ -50,6 +50,9 @@ The renderer preserves attachments and restores graphics state for subsequent dr
 These encoder boundaries add overhead when an application records timestamps.
 `MESA_KK_DEBUG=msl` also prints shaders restored from a pipeline cache.
 
+Indirect draws accept up to 1,048,576 commands per call (`maxDrawIndirectCount`), not 65,535. Each command is still one
+Metal draw, and a GPU count zeroes the commands past it. The cap keeps the 32-bit sizes derived from it in range.
+
 `KK_WORKAROUND_20` changes address arithmetic to avoid a Metal compiler failure.
 See `docs/drivers/kosmickrisp/workarounds.rst` for the trigger and tested platform.
 
@@ -62,6 +65,8 @@ sh check-kosmickrisp.sh
 ```
 
 The checks exercise fence polling, reset, bounded waits, timeline signaling, GPU writes, and distinct timestamps across compute regions.
+When `glslc` is on `PATH`, they also issue 70,000 indexed and non-indexed indirect draws with a GPU count of 66,000 and
+check that exactly the first 66,000 draws ran. The check prints recording and execution times.
 Set `VK_DRIVER_FILES` to another ICD to compare the same executable with another driver.
 
 Supply VIZZA's compiled `raw_grain_contact.spirv` to compare all 8,192 output forces with a CPU reference:
