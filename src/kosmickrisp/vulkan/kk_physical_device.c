@@ -153,6 +153,7 @@ kk_get_device_extensions(const struct kk_instance *instance,
       .KHR_present_id2 = true,
       .KHR_present_wait = true,
       .KHR_present_wait2 = true,
+      .GOOGLE_display_timing = true,
 #endif
       .KHR_robustness2 = true,
       .KHR_shader_fma = true,

@@ -600,7 +600,10 @@ wsi_swapchain_init(const struct wsi_device *wsi,
       };
 
       iface->get_capabilities2(surface, (struct wsi_device *)wsi, NULL, &caps2);
-      wsi_surface_capabilities_add_present_stages(wsi, &timing_caps);
+      /* Metal reports drawable presentation on the host. It does not need
+       * an additional GPU timestamp query for display timing. */
+      if (surface->platform != VK_ICD_WSI_PLATFORM_METAL)
+         wsi_surface_capabilities_add_present_stages(wsi, &timing_caps);
       chain->present_timing.supported_query_stages = timing_caps.presentStageQueries;
    }
 
@@ -1875,7 +1878,7 @@ wsi_swapchain_present_timing_notify_completion(struct wsi_swapchain *chain,
        * since the image was recycled before presentation could fully complete.
        * In this case, we no longer own the timestamp query pool index, so just skip. */
 
-      if (timings->image == image) {
+      if (image && timings->image == image) {
          timings->queue_done_time = 0;
 
          bool success = wsi_swapchain_present_timing_sample_query_pool(

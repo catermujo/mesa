@@ -350,6 +350,7 @@ struct wsi_metal_present_info {
 
    struct u_cnd_monotonic present_id_cond;
    uint64_t present_id;
+   struct wsi_swapchain *timing_chain;
 };
 
 struct wsi_metal_swapchain {
@@ -362,6 +363,7 @@ struct wsi_metal_swapchain {
 
    struct wsi_metal_layer_blit_context *blit_context;
    struct wsi_metal_present_info *present_info;
+   struct wsi_image_timing_request timing_request;
 
    uint32_t current_image_index;
 
@@ -755,11 +757,34 @@ wsi_metal_swapchain_set_present_mode(struct wsi_swapchain *wsi_chain,
 }
 
 static void
-wsi_metal_present_complete(void *present_info_ptr, uint64_t present_id)
+wsi_metal_swapchain_set_timing_request(struct wsi_swapchain *wsi_chain,
+                                      const struct wsi_image_timing_request *request)
+{
+   struct wsi_metal_swapchain *chain = (struct wsi_metal_swapchain *)wsi_chain;
+   chain->timing_request = *request;
+}
+
+static uint64_t
+wsi_metal_swapchain_poll_refresh_duration(struct wsi_swapchain *wsi_chain,
+                                          uint64_t *interval)
+{
+   struct wsi_metal_swapchain *chain = (struct wsi_metal_swapchain *)wsi_chain;
+   *interval = 0;
+   return wsi_metal_layer_refresh_duration(chain->surface->pLayer);
+}
+
+static void
+wsi_metal_present_complete(void *present_info_ptr, uint64_t present_id,
+                           uint64_t timing_serial, uint64_t timestamp)
 {
    struct wsi_metal_present_info *present_info = present_info_ptr;
 
    mtx_lock(&present_info->mutex);
+   if (timing_serial && present_info->timing_chain) {
+      /* Metal supplies the displayed time, but no earlier readiness time. */
+      wsi_swapchain_present_timing_notify_completion(
+         present_info->timing_chain, timing_serial, timestamp, NULL);
+   }
    if (present_id > present_info->present_id) {
       present_info->present_id = present_id;
       u_cnd_monotonic_broadcast(&present_info->present_id_cond);
@@ -782,11 +807,13 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
 
    struct wsi_metal_image *image = &chain->images[image_index];
 
-   if (present_id && wsi_chain->present_wait_enabled) {
+   uint64_t timing_serial = chain->timing_request.feedback ? chain->timing_request.serial : 0;
+   uint64_t wait_id = wsi_chain->present_wait_enabled ? present_id : 0;
+   if (timing_serial || wait_id) {
       wsi_metal_retain_present_info(chain->present_info);
       wsi_metal_layer_add_presented_handler(
          image->drawable, wsi_metal_present_complete, chain->present_info,
-         present_id);
+         wait_id, timing_serial);
    }
 
    if (wsi_chain->wsi->sw) {
@@ -797,7 +824,7 @@ wsi_metal_swapchain_queue_present(struct wsi_swapchain *wsi_chain,
          image->base.row_pitches[0]);
    } else {
       /* Blit is already recorded, just present now */
-      wsi_metal_layer_present(&image->drawable);
+      wsi_metal_layer_present(&image->drawable, chain->timing_request.time);
    }
 
    mtx_lock(&chain->drawable_mutex);
@@ -934,6 +961,13 @@ wsi_metal_swapchain_destroy(struct wsi_swapchain *wsi_chain,
    struct wsi_metal_swapchain *chain =
       (struct wsi_metal_swapchain *)wsi_chain;
 
+   if (wsi_chain->present_timing.active) {
+      /* Late drawable callbacks may outlive the swapchain. */
+      mtx_lock(&chain->present_info->mutex);
+      chain->present_info->timing_chain = NULL;
+      mtx_unlock(&chain->present_info->mutex);
+   }
+
    wsi_metal_stop_drawable_thread(chain);
    u_cnd_monotonic_destroy(&chain->drawable_cond);
    mtx_destroy(&chain->drawable_mutex);
@@ -1039,6 +1073,8 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
    chain->base.release_images = wsi_metal_swapchain_release_images;
    chain->base.set_present_mode = wsi_metal_swapchain_set_present_mode;
    chain->base.queue_present = wsi_metal_swapchain_queue_present;
+   chain->base.set_timing_request = wsi_metal_swapchain_set_timing_request;
+   chain->base.poll_early_refresh = wsi_metal_swapchain_poll_refresh_duration;
    chain->base.wait_for_present = wsi_metal_swapchain_wait_for_present;
    chain->base.wait_for_present2 = wsi_metal_swapchain_wait_for_present;
    chain->base.set_hdr_metadata = wsi_metal_swapchain_set_hdr_metadata;
@@ -1055,6 +1091,7 @@ wsi_metal_surface_create_swapchain(VkIcdSurfaceBase *icd_surface,
       result = VK_ERROR_OUT_OF_HOST_MEMORY;
       goto fail_present_info;
    }
+   chain->present_info->timing_chain = &chain->base;
 
    if (wsi_device->metal.get_mtl4_command_queue) {
       void *mtl4_queue = wsi_device->metal.get_mtl4_command_queue(chain->base.device);

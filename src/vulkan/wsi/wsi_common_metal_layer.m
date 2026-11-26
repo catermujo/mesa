@@ -8,6 +8,7 @@
 
 #include "vk_format.h"
 
+#import <AppKit/AppKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
 
@@ -39,6 +40,25 @@ wsi_metal_layer_size(const CAMetalLayer *metal_layer,
          *width = size.width;
       if (height)
          *height = size.height;
+   }
+}
+
+uint64_t
+wsi_metal_layer_refresh_duration(const CAMetalLayer *metal_layer)
+{
+   @autoreleasepool {
+      NSScreen *screen = nil;
+      for (const CALayer *layer = metal_layer; layer && !screen; layer = layer.superlayer) {
+         id delegate = layer.delegate;
+         if ([delegate isKindOfClass:[NSView class]])
+            screen = ((NSView *)delegate).window.screen;
+      }
+
+      if (!screen)
+         screen = NSScreen.mainScreen;
+
+      NSInteger fps = screen.maximumFramesPerSecond;
+      return fps > 0 ? 1000000000ull / fps : 0;
    }
 }
 
@@ -284,13 +304,15 @@ wsi_metal_release_drawable(CAMetalDrawable *drawable_ptr)
 
 void
 wsi_metal_layer_add_presented_handler(CAMetalDrawable *drawable_ptr,
-                                      void (*presented_handler)(void *, uint64_t),
-                                      void *present_info_ptr, uint64_t present_id)
+                                      void (*presented_handler)(void *, uint64_t, uint64_t, uint64_t),
+                                      void *present_info_ptr, uint64_t present_id,
+                                      uint64_t timing_serial)
 {
    @autoreleasepool {
       id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)drawable_ptr;
       [drawable addPresentedHandler: ^(id<MTLDrawable> mtlDrwbl) {
-         presented_handler(present_info_ptr, present_id);
+         uint64_t timestamp = timing_serial ? (uint64_t)(mtlDrwbl.presentedTime * 1e9) : 0;
+         presented_handler(present_info_ptr, present_id, timing_serial, timestamp);
       }];
    }
 }
@@ -359,11 +381,14 @@ wsi_metal_layer_blit_and_present(struct wsi_metal_layer_blit_context *context,
 }
 
 void
-wsi_metal_layer_present(CAMetalDrawable **drawable_ptr)
+wsi_metal_layer_present(CAMetalDrawable **drawable_ptr, uint64_t desired_time)
 {
    @autoreleasepool {
       id<CAMetalDrawable> drawable = [(id<CAMetalDrawable>)*drawable_ptr autorelease];
-      [drawable present];
+      if (desired_time)
+         [drawable presentAtTime:(double)desired_time / 1e9];
+      else
+         [drawable present];
 
       *drawable_ptr = nil;
    }

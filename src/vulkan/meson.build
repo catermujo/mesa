@@ -73,7 +73,7 @@ if with_platform_macos
   vulkan_wsi_list += '-DVK_USE_PLATFORM_METAL_EXT'
   vulkan_wsi_deps += dependency(
     'appleframeworks',
-    modules : ['QuartzCore', 'Metal']
+    modules : ['AppKit', 'QuartzCore', 'Metal']
   )
 endif
 
